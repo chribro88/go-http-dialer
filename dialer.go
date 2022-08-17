@@ -101,7 +101,7 @@ func (t *HttpTunnel) dialProxyContext(ctx context.Context) (net.Conn, error) {
 	}
 	c := t.tlsConfig
 	if c == nil || (c.ServerName == "" && !c.InsecureSkipVerify) {
-		serverName, _, err := net.SplitHostPort(addr)
+		serverName, _, err := net.SplitHostPort(t.proxyAddr)
 		if err != nil {
 			return nil, err
 		}
