@@ -101,11 +101,11 @@ func (t *HttpTunnel) dialProxyContext(ctx context.Context) (net.Conn, error) {
 	}
 	c := t.tlsConfig
 	if c == nil || (c.ServerName == "" && !c.InsecureSkipVerify) {
-		hostPort := strings.SplitN(t.proxyAddr, ":", 2)
-		if len(hostPort) == 0 || hostPort[0] == "" {
-			return nil, fmt.Errorf("http_tunnel: proxy hostname missing in \"%s\"", t.proxyAddr)
+		serverName, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
 		}
-		c.ServerName = hostPort[0]
+		c.ServerName = serverName
 	}
 	return tls.Client(conn, c), nil
 }
