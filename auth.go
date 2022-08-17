@@ -7,7 +7,7 @@ import "encoding/base64"
 
 const (
 	hdrProxyAuthResp = "Proxy-Authorization"
-	hdrProxyAuthReq = "Proxy-Authenticate"
+	hdrProxyAuthReq  = "Proxy-Authenticate"
 )
 
 // ProxyAuthorization allows for plugging in arbitrary implementations of the "Proxy-Authorization" handler.
@@ -15,12 +15,12 @@ type ProxyAuthorization interface {
 	// Type represents what kind of Authorization, e.g. "Bearer", "Token", "Digest".
 	Type() string
 
-	// Initial allows you to specify an a-priori "Proxy-Authenticate" response header, attached to first request,
+	// InitialResponse returns an a-priori "Proxy-Authenticate" response header, attached to first request,
 	// so you don't need to wait for an additional challenge. If empty string is returned, "Proxy-Authenticate"
 	// header is added.
 	InitialResponse() string
 
-	// ChallengeResponse returns the content of the "Proxy-Authenticate" response header, that has been chose as
+	// ChallengeResponse returns the content of the "Proxy-Authenticate" response header, that has been chosen as
 	// response to "Proxy-Authorization" request header challenge.
 	ChallengeResponse(challenge string) string
 }
@@ -30,7 +30,7 @@ type basicAuth struct {
 	password string
 }
 
-// AuthBasic returns a ProxyAuthorization that implements "Basic" protocol while ignoring realm challanges.
+// AuthBasic returns a ProxyAuthorization that implements "Basic" protocol while ignoring realm challenges.
 func AuthBasic(username string, password string) ProxyAuthorization {
 	return &basicAuth{username: username, password: password}
 }

@@ -7,6 +7,7 @@ package http_dialer
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -21,7 +22,7 @@ type opt func(*HttpTunnel)
 // New constructs an HttpTunnel to be used a net.Dial command.
 // The first parameter is a proxy URL, for example https://foo.example.com:9090 will use foo.example.com as proxy on
 // port 9090 using TLS for connectivity.
-// Optional customization parameters are available, e.g.: WithTls, WithDialer, WithConnectionTimeout
+// Optional customization parameters are available, e.g.: WithTls, WithContextDialer, WithConnectionTimeout
 func New(proxyUrl *url.URL, opts ...opt) *HttpTunnel {
 	t := &HttpTunnel{
 		parentDialer: &net.Dialer{},
@@ -40,17 +41,22 @@ func WithTls(tlsConfig *tls.Config) opt {
 	}
 }
 
-// WithDialer allows the customization of the underlying net.Dialer used for establishing TCP connections to the proxy.
-func WithDialer(dialer *net.Dialer) opt {
+// WithContextDialer allows the customization of the underlying ContextDialer used to establish TCP connections to the proxy.
+func WithContextDialer(dialer ContextDialer) opt {
 	return func(t *HttpTunnel) {
 		t.parentDialer = dialer
 	}
 }
 
 // WithConnectionTimeout customizes the underlying net.Dialer.Timeout.
+// If underlying dialer is not net.Dialer, this call has no effect.
 func WithConnectionTimeout(timeout time.Duration) opt {
 	return func(t *HttpTunnel) {
-		t.parentDialer.Timeout = timeout
+		netDialer, ok := t.parentDialer.(*net.Dialer)
+		if ok {
+			netDialer.Timeout = timeout
+		}
+		return
 	}
 }
 
@@ -63,7 +69,7 @@ func WithProxyAuth(auth ProxyAuthorization) opt {
 
 // HttpTunnel represents a configured HTTP Connect Tunnel dialer.
 type HttpTunnel struct {
-	parentDialer *net.Dialer
+	parentDialer ContextDialer
 	isTls        bool
 	proxyAddr    string
 	tlsConfig    *tls.Config
@@ -85,19 +91,37 @@ func (t *HttpTunnel) parseProxyUrl(proxyUrl *url.URL) {
 	}
 }
 
-func (t *HttpTunnel) dialProxy() (net.Conn, error) {
+func (t *HttpTunnel) dialProxyContext(ctx context.Context) (net.Conn, error) {
 	if !t.isTls {
-		return t.parentDialer.Dial("tcp", t.proxyAddr)
+		return t.parentDialer.DialContext(ctx, "tcp", t.proxyAddr)
 	}
-	return tls.DialWithDialer(t.parentDialer, "tcp", t.proxyAddr, t.tlsConfig)
+	conn, err := t.parentDialer.DialContext(ctx, "tcp", t.proxyAddr)
+	if err != nil {
+		return nil, err
+	}
+	c := t.tlsConfig
+	if c == nil || (c.ServerName == "" && !c.InsecureSkipVerify) {
+		hostPort := strings.SplitN(t.proxyAddr, ":", 2)
+		if len(hostPort) == 0 || hostPort[0] == "" {
+			return nil, fmt.Errorf("http_tunnel: proxy hostname missing in \"%s\"", t.proxyAddr)
+		}
+		c.ServerName = hostPort[0]
+	}
+	return tls.Client(conn, c), nil
 }
 
-// Dial is an implementation of net.Dialer, and returns a TCP connection handle to the host that HTTP CONNECT reached.
-func (t *HttpTunnel) Dial(network string, address string) (net.Conn, error) {
+// Dial is a DialContext call with context.Background
+func (t *HttpTunnel) Dial(network string, addr string) (net.Conn, error) {
+	return t.DialContext(context.Background(), network, addr)
+}
+
+// DialContext is an implementation of ContextDialer, and returns a TCP connection handle to the host that HTTP CONNECT reached.
+// Connection lifecycle is controlled by ctx.
+func (t *HttpTunnel) DialContext(ctx context.Context, network string, address string) (net.Conn, error) {
 	if network != "tcp" {
 		return nil, fmt.Errorf("network type '%v' unsupported (only 'tcp')", network)
 	}
-	conn, err := t.dialProxy()
+	conn, err := t.dialProxyContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("http_tunnel: failed dialing to proxy: %v", err)
 	}
@@ -107,8 +131,9 @@ func (t *HttpTunnel) Dial(network string, address string) (net.Conn, error) {
 		Host:   address, // This is weird
 		Header: make(http.Header),
 	}
+	req = req.WithContext(ctx)
 	if t.auth != nil && t.auth.InitialResponse() != "" {
-		req.Header.Set(hdrProxyAuthResp, t.auth.Type() + " " + t.auth.InitialResponse())
+		req.Header.Set(hdrProxyAuthResp, t.auth.Type()+" "+t.auth.InitialResponse())
 	}
 	resp, err := t.doRoundtrip(conn, req)
 	if err != nil {
@@ -122,7 +147,7 @@ func (t *HttpTunnel) Dial(network string, address string) (net.Conn, error) {
 			conn.Close()
 			return nil, err
 		}
-		req.Header.Set(hdrProxyAuthResp, t.auth.Type() + " " + responseHdr)
+		req.Header.Set(hdrProxyAuthResp, t.auth.Type()+" "+responseHdr)
 		resp, err = t.doRoundtrip(conn, req)
 		if err != nil {
 			conn.Close()
@@ -149,7 +174,7 @@ func (t *HttpTunnel) doRoundtrip(conn net.Conn, req *http.Request) (*http.Respon
 
 func (t *HttpTunnel) performAuthChallengeResponse(resp *http.Response) (string, error) {
 	respAuthHdr := resp.Header.Get(hdrProxyAuthReq)
-	if !strings.Contains(respAuthHdr, t.auth.Type() + " ") {
+	if !strings.Contains(respAuthHdr, t.auth.Type()+" ") {
 		return "", fmt.Errorf("http_tunnel: expected '%v' Proxy authentication, got: '%v'", t.auth.Type(), respAuthHdr)
 	}
 	splits := strings.SplitN(respAuthHdr, " ", 2)
