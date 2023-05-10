@@ -67,11 +67,19 @@ func WithProxyAuth(auth ProxyAuthorization) opt {
 	}
 }
 
+// WithProxyHeader allows you to add http.Header to calls.
+func WithProxyHeader(proxyHeader http.Header) opt {
+	return func(t *HttpTunnel) {
+		t.proxyHeader = proxyHeader
+	}
+}
+
 // HttpTunnel represents a configured HTTP Connect Tunnel dialer.
 type HttpTunnel struct {
 	parentDialer ContextDialer
 	isTls        bool
 	proxyAddr    string
+	proxyHeader  http.Header
 	tlsConfig    *tls.Config
 	auth         ProxyAuthorization
 }
@@ -129,7 +137,7 @@ func (t *HttpTunnel) DialContext(ctx context.Context, network string, address st
 		Method: "CONNECT",
 		URL:    &url.URL{Opaque: address},
 		Host:   address, // This is weird
-		Header: make(http.Header),
+		Header: t.proxyHeader,
 	}
 	req = req.WithContext(ctx)
 	if t.auth != nil && t.auth.InitialResponse() != "" {
